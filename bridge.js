@@ -13,7 +13,7 @@ async function dbLogin(){try{
  if(!email||!password)throw Error('請輸入 Supabase Auth 帳號與密碼');dbMessage('登入中…');
  const result=await dbRequest('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});
  dbToken=result.access_token;document.getElementById('db-password').value='';
- const ps=await dbRequest('/rest/v1/profiles?select=user_id,display_name,role,center_id,active&user_id=eq.'+encodeURIComponent(result.user.id)+'&limit=1');
+ const ps=await dbRequest('/rest/v1/rpc/scheduler_my_profile',{method:'POST',body:'{}'});
  if(!ps?.[0]?.active)throw Error('登入成功，但找不到啟用的 profiles 權限');dbProfile=ps[0];
  dbMessage('已登入：'+(dbProfile.display_name||email)+'／'+dbProfile.role);await dbLoad();
  }catch(e){dbMessage('登入／讀取失敗：'+e.message)} }
@@ -21,15 +21,15 @@ function dbLogout(){dbToken=null;dbCenter=null;dbProfile=null;dbMessage('已登�
 function dbPanel(){return `<section class="panel"><h2>Supabase 正式資料連線</h2><div class="note">僅使用 Publishable Key 與 Auth 登入。現有 DMS、餐廳及班表只讀取；員工與指休需要先執行隨附的資料庫升級 SQL 並確認 RLS。</div><div class="toolbar"><input id="db-email" type="email" placeholder="Supabase Auth Email" autocomplete="username"><input id="db-password" type="password" placeholder="密碼" autocomplete="current-password"><button class="primary" onclick="dbLogin()">登入並載入</button><button onclick="dbLoad()" ${dbToken?'':'disabled'}>重新同步</button><button onclick="dbLogout()">登出</button></div><p id="db-message" class="muted">${dbProfile?'已登入：'+esc(dbProfile.display_name||dbProfile.role):'尚未登入；不會使用示範資料冒充正式資料'}</p><p class="muted">登入後以帳號所屬中心為準；正式同步資料會顯示在員工管理、員工指休及歷史 TC 頁面。</p></section>`}
 async function dbLoad(){if(!dbToken||dbBusy)return;dbBusy=true;try{
  dbMessage('正在讀取中心、餐廳、員工及歷史 TC…');
- const centers=await dbRequest('/rest/v1/centers?select=id,name,active&active=eq.true');
- dbCenter=dbProfile.center_id||centers[0]?.id;if(!dbCenter)throw Error('找不到可使用的中心');
+ const centers=[]; // Center is exclusively bound to the authenticated profile
+ dbCenter=dbProfile.center_id;if(!dbCenter)throw Error('中心帳號未設定 center_id');
  const qs='center_id=eq.'+encodeURIComponent(dbCenter);
  const [dbRestaurants,employees,regular,exceptions,historical,supportGroups]=await Promise.all([
- dbRequest('/rest/v1/restaurants?select=id,center_id,region_code,restaurant_name,active&'+qs+'&active=eq.true&limit=2000'),
+ dbRequest('/rest/v1/rpc/scheduler_center_restaurants',{method:'POST',body:'{}'}),
  dbRequest('/rest/v1/scheduler_employees?select=id,center_id,employee_code,employee_name,group_code,min_shift_hours,active&'+qs+'&active=eq.true&limit=2000'),
  dbRequest('/rest/v1/scheduler_regular_availability?select=employee_id,weekday,window_no,start_time,end_time&limit=5000'),
  dbRequest('/rest/v1/scheduler_weekly_exceptions?select=employee_id,work_date,exception_type,windows&limit=5000'),
- dbRequest('/rest/v1/dms_30m?select=center_id,restaurant_id,business_date,bucket_time,own_tc&'+qs+'&order=business_date.desc&limit=1000'),
+ Promise.resolve([]), // complete 8-week data loaded separately through secure paged RPC
  dbRequest('/rest/v1/scheduler_employee_support_groups?select=employee_id,group_code&limit=5000')
  ]);
  const validGroups=[...new Set(dbRestaurants.map(r=>r.region_code).filter(Boolean))].sort();
@@ -39,8 +39,8 @@ async function dbLoad(){if(!dbToken||dbBusy)return;dbBusy=true;try{
  state.exceptions={};for(const e of next){const days={};for(const x of exceptions.filter(x=>x.employee_id===e.dbId))days[x.work_date]={type:x.exception_type,windows:x.windows};for(const [date,v] of Object.entries(days)){let w=weekStart(date),k=e.id+'|'+w;state.exceptions[k]??={days:{}};state.exceptions[k].days[date]=v}}
  // Convert DMS rows to existing historical TC structure; no synthetic predictions.
  const idMap=new Map(dbRestaurants.map(r=>[String(r.id),r]));state.historyTC=historical.filter(x=>idMap.has(String(x.restaurant_id))).map(x=>{const r=idMap.get(String(x.restaurant_id));return {date:x.business_date,group:r.region_code,restaurant:r.restaurant_name,time:x.bucket_time.slice(0,5),own_tc:x.own_tc,activity:'',baseline:''}});
- state.dbRestaurants=dbRestaurants;state.dbLoaded=true;state.dbCenter=dbCenter;state.dbStats={employees:next.length,restaurants:dbRestaurants.length,history:state.historyTC.length};save();render();dbMessage('正式資料載入：員工 '+next.length+'、餐廳 '+dbRestaurants.length+'、歷史 TC '+state.historyTC.length+' 筆（最近 1000 筆 DMS，尚非完整歷史）');
- }catch(e){dbMessage('資料讀取失敗：'+e.message+'。請確認 SQL、Auth 及各表 RLS。')}finally{dbBusy=false}}
+ state.dbRestaurants=dbRestaurants;state.dbLoaded=true;state.dbCenter=dbCenter;state.dbStats={employees:next.length,restaurants:dbRestaurants.length,history:state.historyTC.length};render();dbMessage('中心 '+dbCenter+'：員工 '+next.length+'、餐廳 '+dbRestaurants.length+'；正在讀取完整 8 週 DMS');
+ }catch(e){state.dbLoaded=false;dbMessage('資料讀取失敗：'+e.message+'。請確認 SQL、Auth 及各表 RLS。');throw e}finally{dbBusy=false}}
 async function dbAddEmployee(){if(!dbToken||!dbCenter)return alert('請先登入並載入 Supabase');const code=document.getElementById('new-employee-code')?.value.trim(),name=document.getElementById('new-employee-name')?.value.trim(),group=document.getElementById('new-employee-group')?.value;if(!code||!name||!group)return alert('請填寫員工編號、姓名、Group');try{await dbRequest('/rest/v1/scheduler_employees',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({center_id:dbCenter,employee_code:code,employee_name:name,group_code:group})});await dbLoad();setTab('employees')}catch(e){alert('新增失敗：'+e.message)}}
 async function dbSaveRegular(id,idx,field,value){const e=getEmployee(id);if(!e?.dbId)return alert('請先載入正式員工資料');let a=state.regularWeekly?.[id]?.[idx]||null;let updated=a?JSON.parse(JSON.stringify(a)):null;if(field==='off')updated=value?null:[['08:00','12:00']];else{updated??=[['08:00','12:00']];updated[0][field==='start'?0:1]=value}try{
  await dbRequest('/rest/v1/scheduler_regular_availability?employee_id=eq.'+e.dbId+'&weekday=eq.'+(idx+1),{method:'DELETE'});
