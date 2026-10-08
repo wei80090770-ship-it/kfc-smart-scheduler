@@ -24,21 +24,22 @@ async function dbLoad(){if(!dbToken||dbBusy)return;dbBusy=true;try{
  const centers=await dbRequest('/rest/v1/centers?select=id,name,active&active=eq.true');
  dbCenter=dbProfile.center_id||centers[0]?.id;if(!dbCenter)throw Error('找不到可使用的中心');
  const qs='center_id=eq.'+encodeURIComponent(dbCenter);
- const [restaurants,employees,regular,exceptions,historical]=await Promise.all([
+ const [dbRestaurants,employees,regular,exceptions,historical,supportGroups]=await Promise.all([
  dbRequest('/rest/v1/restaurants?select=id,center_id,region_code,restaurant_name,active&'+qs+'&active=eq.true&limit=2000'),
  dbRequest('/rest/v1/scheduler_employees?select=id,center_id,employee_code,employee_name,group_code,min_shift_hours,active&'+qs+'&active=eq.true&limit=2000'),
  dbRequest('/rest/v1/scheduler_regular_availability?select=employee_id,weekday,window_no,start_time,end_time&limit=5000'),
  dbRequest('/rest/v1/scheduler_weekly_exceptions?select=employee_id,work_date,exception_type,windows&limit=5000'),
- dbRequest('/rest/v1/dms_30m?select=center_id,restaurant_id,business_date,bucket_time,own_tc&'+qs+'&order=business_date.desc&limit=1000')
+ dbRequest('/rest/v1/dms_30m?select=center_id,restaurant_id,business_date,bucket_time,own_tc&'+qs+'&order=business_date.desc&limit=1000'),
+ dbRequest('/rest/v1/scheduler_employee_support_groups?select=employee_id,group_code&limit=5000')
  ]);
- const validGroups=[...new Set(restaurants.map(r=>r.region_code).filter(Boolean))].sort();
- if(validGroups.length){groups.splice(0,groups.length,...validGroups);for(const k of Object.keys(restaurants||{}))delete restaurants[k];for(const g of groups)restaurants[g]=restaurants.filter(r=>r.region_code===g).map(r=>r.restaurant_name);state.group=groups.includes(state.group)?state.group:groups[0]}
- const next=employees.map(e=>({id:e.employee_code,name:e.employee_name,group:e.group_code,start:5,end:14,min:Number(e.min_shift_hours),dbId:e.id}));
+ const validGroups=[...new Set(dbRestaurants.map(r=>r.region_code).filter(Boolean))].sort();
+ if(validGroups.length){groups.splice(0,groups.length,...validGroups);for(const k of Object.keys(restaurants))delete restaurants[k];for(const g of groups)restaurants[g]=dbRestaurants.filter(r=>r.region_code===g).map(r=>r.restaurant_name);state.group=groups.includes(state.group)?state.group:groups[0]}
+ const next=employees.map(e=>({id:e.employee_code,name:e.employee_name,group:e.group_code,start:5,end:14,min:Number(e.min_shift_hours),dbId:e.id,support:supportGroups.filter(s=>s.employee_id===e.id).map(s=>s.group_code)}));
  state.employees=next;state.regularWeekly={};for(const e of next){const a=Array.from({length:7},()=>null);for(const r of regular.filter(x=>x.employee_id===e.dbId)){let i=r.weekday-1;if(i>=0&&i<7){a[i]??=[];a[i].push([r.start_time.slice(0,5),r.end_time.slice(0,5)])}}state.regularWeekly[e.id]=a}
  state.exceptions={};for(const e of next){const days={};for(const x of exceptions.filter(x=>x.employee_id===e.dbId))days[x.work_date]={type:x.exception_type,windows:x.windows};for(const [date,v] of Object.entries(days)){let w=weekStart(date),k=e.id+'|'+w;state.exceptions[k]??={days:{}};state.exceptions[k].days[date]=v}}
  // Convert DMS rows to existing historical TC structure; no synthetic predictions.
- const idMap=new Map(restaurants.map(r=>[String(r.id),r]));state.historyTC=historical.filter(x=>idMap.has(String(x.restaurant_id))).map(x=>{const r=idMap.get(String(x.restaurant_id));return {date:x.business_date,group:r.region_code,restaurant:r.restaurant_name,time:x.bucket_time.slice(0,5),own_tc:x.own_tc,activity:'',baseline:''}});
- state.dbLoaded=true;state.dbCenter=dbCenter;state.dbStats={employees:next.length,restaurants:restaurants.length,history:state.historyTC.length};save();render();dbMessage('正式資料載入：員工 '+next.length+'、餐廳 '+restaurants.length+'、歷史 TC '+state.historyTC.length+' 筆（最近 1000 筆 DMS，尚非完整歷史）');
+ const idMap=new Map(dbRestaurants.map(r=>[String(r.id),r]));state.historyTC=historical.filter(x=>idMap.has(String(x.restaurant_id))).map(x=>{const r=idMap.get(String(x.restaurant_id));return {date:x.business_date,group:r.region_code,restaurant:r.restaurant_name,time:x.bucket_time.slice(0,5),own_tc:x.own_tc,activity:'',baseline:''}});
+ state.dbRestaurants=dbRestaurants;state.dbLoaded=true;state.dbCenter=dbCenter;state.dbStats={employees:next.length,restaurants:dbRestaurants.length,history:state.historyTC.length};save();render();dbMessage('正式資料載入：員工 '+next.length+'、餐廳 '+dbRestaurants.length+'、歷史 TC '+state.historyTC.length+' 筆（最近 1000 筆 DMS，尚非完整歷史）');
  }catch(e){dbMessage('資料讀取失敗：'+e.message+'。請確認 SQL、Auth 及各表 RLS。')}finally{dbBusy=false}}
 async function dbAddEmployee(){if(!dbToken||!dbCenter)return alert('請先登入並載入 Supabase');const code=document.getElementById('new-employee-code')?.value.trim(),name=document.getElementById('new-employee-name')?.value.trim(),group=document.getElementById('new-employee-group')?.value;if(!code||!name||!group)return alert('請填寫員工編號、姓名、Group');try{await dbRequest('/rest/v1/scheduler_employees',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({center_id:dbCenter,employee_code:code,employee_name:name,group_code:group})});await dbLoad();setTab('employees')}catch(e){alert('新增失敗：'+e.message)}}
 async function dbSaveRegular(id,idx,field,value){const e=getEmployee(id);if(!e?.dbId)return alert('請先載入正式員工資料');let a=state.regularWeekly?.[id]?.[idx]||null;let updated=a?JSON.parse(JSON.stringify(a)):null;if(field==='off')updated=value?null:[['08:00','12:00']];else{updated??=[['08:00','12:00']];updated[0][field==='start'?0:1]=value}try{
