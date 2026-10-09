@@ -29,9 +29,9 @@
  }
  const originalSetTab=setTab;
  setTab=function(t){if(!names.some(x=>x[0]===t))t='overview';originalSetTab(t)};
- render=function(){if(!names.some(x=>x[0]===state.tab))state.tab='overview';if(state.tab==='compliance'){document.getElementById('nav').innerHTML=names.map(([id,name])=>`<button class="${state.tab===id?'active':''}" onclick="setTab('${id}')">${name}</button>`).join('');document.getElementById('app').innerHTML=compliance();return}prevRender();document.getElementById('nav').innerHTML=names.map(([id,name])=>`<button class="${state.tab===id?'active':''}" onclick="setTab('${id}')">${name}</button>`).join('')};
+ render=function(){if(!names.some(x=>x[0]===state.tab))state.tab='overview';if(!dbToken||!state.dbLoaded){document.getElementById('nav').innerHTML=names.map(([id,name])=>`<button class="${state.tab===id?'active':''}" onclick="setTab('${id}')">${name}</button>`).join('');document.getElementById('app').innerHTML=dbPanel()+'<section class="panel"><h2>正式資料尚未載入</h2><p>請登入 Supabase 後操作九頁功能。未登入時不顯示內建示範員工、餐廳、TC 或本機班表，以避免與正式資料混淆。</p></section>';return;}if(state.tab==='compliance'){document.getElementById('nav').innerHTML=names.map(([id,name])=>`<button class="${state.tab===id?'active':''}" onclick="setTab('${id}')">${name}</button>`).join('');document.getElementById('app').innerHTML=compliance();return}prevRender();document.getElementById('nav').innerHTML=names.map(([id,name])=>`<button class="${state.tab===id?'active':''}" onclick="setTab('${id}')">${name}</button>`).join('')};
  // Remove misleading prototype labeling from the header and footer only; do not imply unverified features are complete.
  const h=document.querySelector('header h1');if(h)h.textContent='KFC 外送中心｜智慧排班';
- const foot=document.querySelector('.foot');if(foot)foot.textContent='班表發布、法規檢核及氣象自動更新尚未完成正式環境驗收；請勿將瀏覽器草稿視為正式發布班表。';
+ const foot=document.querySelector('.foot');if(foot)foot.textContent='正式資料由 Supabase Auth 與 RLS 控管；班表發布、合規與天氣更新須經正式環境驗收。';
  render();
 })();
