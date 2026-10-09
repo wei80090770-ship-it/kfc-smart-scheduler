@@ -21,11 +21,11 @@ function dbLogout(){dbToken=null;dbCenter=null;dbProfile=null;dbMessage('已登�
 function dbPanel(){return `<section class="panel"><h2>Supabase 正式資料連線</h2><div class="note">僅使用 Publishable Key 與 Auth 登入。現有 DMS、餐廳及班表只讀取；員工與指休需要先執行隨附的資料庫升級 SQL 並確認 RLS。</div><div class="toolbar"><input id="db-email" type="email" placeholder="Supabase Auth Email" autocomplete="username"><input id="db-password" type="password" placeholder="密碼" autocomplete="current-password"><button class="primary" onclick="dbLogin()">登入並載入</button><button onclick="dbLoad()" ${dbToken?'':'disabled'}>重新同步</button><button onclick="dbLogout()">登出</button></div><p id="db-message" class="muted">${dbProfile?'已登入：'+esc(dbProfile.display_name||dbProfile.role):'尚未登入；不會使用示範資料冒充正式資料'}</p><p class="muted">登入後以帳號所屬中心為準；正式同步資料會顯示在員工管理、員工指休及歷史 TC 頁面。</p></section>`}
 async function dbLoad(){if(!dbToken||dbBusy)return;dbBusy=true;try{
  dbMessage('正在讀取中心、餐廳、員工及歷史 TC…');
- const centers=[]; // Center is exclusively bound to the authenticated profile
- dbCenter=dbProfile.center_id;if(!dbCenter)throw Error('中心帳號未設定 center_id');
+ const centers=[]; // All center selection must be enforced by Supabase RLS
+ dbCenter=dbCenter||dbProfile.center_id;if(!dbCenter)throw Error('請先選擇中心');
  const qs='center_id=eq.'+encodeURIComponent(dbCenter);
  const [dbRestaurants,employees,regular,exceptions,historical,supportGroups]=await Promise.all([
- dbRequest('/rest/v1/rpc/scheduler_center_restaurants',{method:'POST',body:'{}'}),
+ dbRequest('/rest/v1/restaurants?select=id,center_id,region_code,restaurant_name&'+qs+'&active=eq.true&limit=2000'),
  dbRequest('/rest/v1/scheduler_employees?select=id,center_id,employee_code,employee_name,group_code,min_shift_hours,active&'+qs+'&active=eq.true&limit=2000'),
  dbRequest('/rest/v1/scheduler_regular_availability?select=employee_id,weekday,window_no,start_time,end_time&limit=5000'),
  dbRequest('/rest/v1/scheduler_weekly_exceptions?select=employee_id,work_date,exception_type,windows&limit=5000'),
@@ -35,7 +35,7 @@ async function dbLoad(){if(!dbToken||dbBusy)return;dbBusy=true;try{
  const validGroups=[...new Set(dbRestaurants.map(r=>r.region_code).filter(Boolean))].sort();
  if(validGroups.length){groups.splice(0,groups.length,...validGroups);for(const k of Object.keys(restaurants))delete restaurants[k];for(const g of groups)restaurants[g]=dbRestaurants.filter(r=>r.region_code===g).map(r=>r.restaurant_name);state.group=groups.includes(state.group)?state.group:groups[0]}
  const next=employees.map(e=>({id:e.employee_code,name:e.employee_name,group:e.group_code,start:5,end:14,min:Number(e.min_shift_hours),dbId:e.id,support:supportGroups.filter(s=>s.employee_id===e.id).map(s=>s.group_code)}));
- state.employees=next;state.regularWeekly={};for(const e of next){const a=Array.from({length:7},()=>null);for(const r of regular.filter(x=>x.employee_id===e.dbId)){let i=r.weekday-1;if(i>=0&&i<7){a[i]??=[];a[i].push([r.start_time.slice(0,5),r.end_time.slice(0,5)])}}state.regularWeekly[e.id]=a}
+ state.assigned={};state.forecast={};state.historyTC=[];state.historyWindow=null;state.employees=next;state.regularWeekly={};for(const e of next){const a=Array.from({length:7},()=>null);for(const r of regular.filter(x=>x.employee_id===e.dbId)){let i=r.weekday-1;if(i>=0&&i<7){a[i]??=[];a[i].push([r.start_time.slice(0,5),r.end_time.slice(0,5)])}}state.regularWeekly[e.id]=a}
  state.exceptions={};for(const e of next){const days={};for(const x of exceptions.filter(x=>x.employee_id===e.dbId))days[x.work_date]={type:x.exception_type,windows:x.windows};for(const [date,v] of Object.entries(days)){let w=weekStart(date),k=e.id+'|'+w;state.exceptions[k]??={days:{}};state.exceptions[k].days[date]=v}}
  // Convert DMS rows to existing historical TC structure; no synthetic predictions.
  const idMap=new Map(dbRestaurants.map(r=>[String(r.id),r]));state.historyTC=historical.filter(x=>idMap.has(String(x.restaurant_id))).map(x=>{const r=idMap.get(String(x.restaurant_id));return {date:x.business_date,group:r.region_code,restaurant:r.restaurant_name,time:x.bucket_time.slice(0,5),own_tc:x.own_tc,activity:'',baseline:''}});
