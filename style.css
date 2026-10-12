@@ -11,3 +11,5 @@
 
 /* 原階梯格內顯示指休／不可上班，不增加新面板 */
 .stair-grid .slot-restricted{background:#f2f2f2;color:#777;border:1px dashed #bbb}
+/* Page 2 controls: preserve original staircase grid */
+.stair-day-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.stair-day-tab{border:1px solid #d9dfe4;border-radius:22px;background:white;color:#66717b;padding:7px 15px;cursor:pointer}.stair-day-tab.selected{background:#181b1e;color:white;border-color:#181b1e}.stair-employee{position:sticky}.stair-choose-employee{max-width:150px;width:100%;padding:5px;border:1px solid #cbd5e1;border-radius:5px}.stair-remove-row{float:right;border:0;background:transparent;color:#b42318;cursor:pointer;padding:2px 5px}.stair-remove-row:hover{background:#fee4e2;border-radius:4px}
